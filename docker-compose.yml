@@ -28,5 +28,12 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+
 volumes:
   redis_data:
+
+networks:
+  dokploy-network:
+    external: true
+  internal:
+    driver: bridge
