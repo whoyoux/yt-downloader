@@ -1,10 +1,8 @@
 "use server";
 
-import type Innertube from "youtubei.js";
-// import youtubedl from "youtube-dl-exec";
 import z from "zod";
 import { actionClient } from "@/lib/safe-action";
-import { getYoutube } from "@/lib/yt";
+import { getVideoInfo } from "@/lib/yt";
 import { en } from "@/locales/en";
 
 const fetchVideoSchema = z.object({
@@ -36,125 +34,39 @@ export const fetchVideo = actionClient
   .action(async ({ parsedInput: { url } }) => {
     try {
       const videoId = getVideoIdFromUrl(url);
-
-      const yt = await getYoutube();
-      const videoInfo = await yt.getInfo(videoId);
-
-      const { basic_info } = videoInfo;
-
-      const thumbnail = basic_info.thumbnail?.[0].url;
-      const title = basic_info.title;
-      const author = basic_info.author;
-      const views = basic_info.view_count;
-
-      if (!thumbnail || !title || !author || !views) {
-        return {
-          success: false,
-          message: en.fetchVideo.couldNotFetch,
-        };
-      }
-
-      const formats = getBestFormats(videoInfo);
+      const video = await getVideoInfo(videoId);
 
       return {
         success: true,
-        video: {
-          id: videoId,
-          title,
-          thumbnail,
-          author,
-          views,
-          formats,
-        },
+        video,
       } satisfies FetchVideoSuccessResponse;
     } catch (err) {
+      console.error(`[FETCH VIDEO] Error:`, err);
       if (err instanceof Error)
         return {
           success: false,
           message: err.message,
         };
+
+      return {
+        success: false,
+        message: en.fetchVideo.couldNotFetch,
+      };
     }
   });
 
 const getVideoIdFromUrl = (url: string): string => {
-  let id = url.split("v=")[1];
-  const ampersandPosition = id.indexOf("&");
-  if (ampersandPosition !== -1) {
-    id = id.substring(0, ampersandPosition);
-  }
-
-  return id;
-};
-
-function getBestFormats(videoInfo: Awaited<ReturnType<Innertube["getInfo"]>>) {
-  const raw = [
-    ...(videoInfo.streaming_data?.formats ?? []),
-    ...(videoInfo.streaming_data?.adaptive_formats ?? []),
+  const patterns = [
+    /(?:v=)([a-zA-Z0-9_-]{11})/,
+    /(?:youtu\.be\/)([a-zA-Z0-9_-]{11})/,
+    /(?:embed\/)([a-zA-Z0-9_-]{11})/,
+    /(?:shorts\/)([a-zA-Z0-9_-]{11})/,
   ];
 
-  const validFormats = raw
-    .filter(
-      (
-        f,
-      ): f is typeof f & {
-        itag: number;
-        mime_type: string;
-        quality: string;
-        quality_label: string;
-        has_video: true;
-      } =>
-        typeof f.itag === "number" &&
-        typeof f.mime_type === "string" &&
-        typeof f.quality === "string" &&
-        typeof f.quality_label === "string" &&
-        f.has_video === true,
-    )
-    .map((f) => ({
-      itag: f.itag,
-      mimeType: f.mime_type,
-      quality: f.quality,
-      qualityLabel: f.quality_label,
-      hasAudio: f.has_audio ?? false,
-      bitrate: f.bitrate ?? 0,
-    }));
-
-  const best = new Map<string, (typeof validFormats)[number]>();
-
-  for (const format of validFormats) {
-    const existing = best.get(format.qualityLabel);
-
-    if (!existing) {
-      best.set(format.qualityLabel, format);
-      continue;
-    }
-
-    const isBetter =
-      (!existing.hasAudio && format.hasAudio) ||
-      (existing.hasAudio === format.hasAudio &&
-        format.bitrate > existing.bitrate);
-
-    if (isBetter) {
-      best.set(format.qualityLabel, format);
-    }
+  for (const pattern of patterns) {
+    const match = url.match(pattern);
+    if (match) return match[1];
   }
 
-  const resolution = (label: string) => Number(label.match(/\d+/)?.[0] ?? 0);
-
-  return Array.from(best.values())
-    .sort((a, b) => resolution(b.qualityLabel) - resolution(a.qualityLabel))
-    .map(
-      ({
-        itag,
-        mimeType,
-        quality,
-        qualityLabel,
-        hasAudio,
-      }): VideoFormatType => ({
-        itag,
-        mimeType,
-        quality,
-        qualityLabel,
-        hasAudio,
-      }),
-    );
-}
+  throw new Error("Invalid YouTube URL");
+};
